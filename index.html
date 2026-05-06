@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CycTrack Pro</title>
+    <title>CycTrack Pro + Kcal</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#000000">
     <style>
@@ -12,18 +12,19 @@
             display: flex; flex-direction: column; align-items: center;
             justify-content: center; min-height: 100vh; margin: 0;
         }
-        .label { font-size: 1rem; color: #888; text-transform: uppercase; }
-        .value { font-size: 5.5rem; font-weight: bold; color: #00ff00; line-height: 1; }
-        .grid { display: grid; grid-template-columns: 1fr 1fr; width: 90%; gap: 20px; text-align: center; margin-top: 20px; }
-        .small-value { font-size: 2.2rem; font-weight: bold; }
+        .label { font-size: 0.9rem; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+        .value { font-size: 6rem; font-weight: bold; color: #00ff00; line-height: 1; margin: 10px 0; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; width: 90%; gap: 15px; text-align: center; margin-top: 10px; }
+        .stat-box { background: #111; padding: 15px; border-radius: 15px; }
+        .small-value { font-size: 2rem; font-weight: bold; color: #fff; }
         #startBtn {
-            margin-top: 30px; padding: 18px 50px; font-size: 1.2rem; font-weight: bold;
+            margin-top: 25px; padding: 18px 60px; font-size: 1.3rem; font-weight: bold;
             border-radius: 40px; border: none; background-color: #222; color: white;
-            box-shadow: 0 4px 15px rgba(0,255,0,0.1); transition: 0.3s;
+            box-shadow: 0 4px 15px rgba(0,255,0,0.1); cursor: pointer;
         }
-        #startBtn.active { background-color: #ff3b30; box-shadow: 0 4px 15px rgba(255,0,0,0.3); }
-        #historyList { width: 90%; margin-top: 20px; max-height: 150px; overflow-y: auto; border-top: 1px solid #222; }
-        .history-item { display: flex; justify-content: space-between; padding: 10px; border-bottom: 1px solid #111; font-size: 0.85rem; }
+        #startBtn.active { background-color: #ff3b30; }
+        #historyList { width: 90%; margin-top: 25px; max-height: 200px; overflow-y: auto; border-top: 1px solid #222; }
+        .history-item { display: flex; justify-content: space-between; padding: 12px; border-bottom: 1px solid #111; font-size: 0.8rem; }
     </style>
 </head>
 <body>
@@ -32,29 +33,43 @@
     <div id="speed" class="value">0.0</div>
 
     <div class="grid">
-        <div>
+        <div class="stat-box">
             <div class="label">Quãng đường</div>
             <div id="distance" class="small-value">0.00</div>
             <div class="label">km</div>
         </div>
-        <div>
+        <div class="stat-box">
+            <div class="label">Năng lượng</div>
+            <div id="kcal" class="small-value">0</div>
+            <div class="label">kcal</div>
+        </div>
+        <div class="stat-box">
             <div class="label">Thời gian</div>
             <div id="timer" class="small-value">00:00</div>
-            <div class="label">phút:giây</div>
+        </div>
+        <div class="stat-box">
+            <div class="label">Cân nặng</div>
+            <div class="small-value">70</div>
+            <div class="label">kg</div>
         </div>
     </div>
 
     <button id="startBtn">BẮT ĐẦU</button>
-    <div id="historyList"></div>
+    
+    <div id="historyList">
+        <div style="text-align:center; color:#444; padding:10px;">Lịch sử đạp xe</div>
+    </div>
 
     <script>
         // Đăng ký Service Worker để chạy Offline
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('sw.js');
+            navigator.serviceWorker.register('sw.js').catch(() => {});
         }
 
-        let watchID = null, totalDistance = 0, lastCoords = null, elapsedSeconds = 0, timerInterval = null;
+        let watchID = null, totalDistance = 0, lastCoords = null, elapsedSeconds = 0, timerInterval = null, totalKcal = 0;
+        const USER_WEIGHT = 65; // Bạn có thể thay đổi cân nặng ở đây
 
+        // Tính khoảng cách Haversine
         function calculateDistance(lat1, lon1, lat2, lon2) {
             const R = 6371e3;
             const dLat = (lat2-lat1) * Math.PI/180;
@@ -63,22 +78,44 @@
             return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
         }
 
+        // Xác định chỉ số MET dựa trên vận tốc
+        function getMET(speedKmh) {
+            if (speedKmh < 1) return 0;
+            if (speedKmh < 16) return 4.0;
+            if (speedKmh < 19) return 6.8;
+            if (speedKmh < 22) return 8.0;
+            return 10.0;
+        }
+
         function saveAndReset() {
-            if (totalDistance > 5) { // Chỉ lưu nếu đi trên 5 mét
+            if (totalDistance > 5) {
                 const history = JSON.parse(localStorage.getItem('rides') || '[]');
-                history.unshift({ date: new Date().toLocaleDateString('vi-VN'), dist: (totalDistance/1000).toFixed(2), time: document.getElementById('timer').innerText });
+                history.unshift({ 
+                    date: new Date().toLocaleDateString('vi-VN'), 
+                    dist: (totalDistance/1000).toFixed(2), 
+                    time: document.getElementById('timer').innerText,
+                    kcal: Math.round(totalKcal)
+                });
                 localStorage.setItem('rides', JSON.stringify(history.slice(0, 10)));
                 renderHistory();
             }
-            totalDistance = 0; elapsedSeconds = 0; lastCoords = null;
+            totalDistance = 0; elapsedSeconds = 0; lastCoords = null; totalKcal = 0;
             document.getElementById('distance').innerText = "0.00";
             document.getElementById('timer').innerText = "00:00";
             document.getElementById('speed').innerText = "0.0";
+            document.getElementById('kcal').innerText = "0";
         }
 
         function renderHistory() {
             const history = JSON.parse(localStorage.getItem('rides') || '[]');
-            document.getElementById('historyList').innerHTML = history.map(i => `<div class="history-item"><span>${i.date}</span><span style="color:#0f0">${i.dist} km</span><span>${i.time}</span></div>`).join('');
+            document.getElementById('historyList').innerHTML = history.map(i => `
+                <div class="history-item">
+                    <span>${i.date}</span>
+                    <span style="color:#0f0">${i.dist} km</span>
+                    <span style="color:#ffcc00">${i.kcal} kcal</span>
+                    <span>${i.time}</span>
+                </div>
+            `).join('');
         }
 
         document.getElementById('startBtn').onclick = function() {
@@ -88,12 +125,28 @@
                 saveAndReset();
                 watchID = null; this.innerText = "BẮT ĐẦU"; this.classList.remove('active');
             } else {
-                timerInterval = setInterval(() => { elapsedSeconds++; let m = Math.floor(elapsedSeconds/60).toString().padStart(2,'0'), s = (elapsedSeconds%60).toString().padStart(2,'0'); document.getElementById('timer').innerText = m+":"+s; }, 1000);
+                timerInterval = setInterval(() => { 
+                    elapsedSeconds++; 
+                    let m = Math.floor(elapsedSeconds/60).toString().padStart(2,'0'), 
+                        s = (elapsedSeconds%60).toString().padStart(2,'0'); 
+                    document.getElementById('timer').innerText = m+":"+s; 
+                    
+                    // Tính Kcal mỗi giây dựa trên vận tốc hiện tại
+                    let currentSpeed = parseFloat(document.getElementById('speed').innerText);
+                    let met = getMET(currentSpeed);
+                    totalKcal += (met * 3.5 * USER_WEIGHT) / (200 * 60);
+                    document.getElementById('kcal').innerText = Math.round(totalKcal);
+                }, 1000);
+
                 watchID = navigator.geolocation.watchPosition(pos => {
-                    let s = pos.coords.speed || 0; document.getElementById('speed').innerText = (s > 0.5 ? s*3.6 : 0).toFixed(1);
+                    let s = pos.coords.speed || 0; 
+                    document.getElementById('speed').innerText = (s > 0.5 ? s*3.6 : 0).toFixed(1);
                     if (lastCoords) {
                         let d = calculateDistance(lastCoords.latitude, lastCoords.longitude, pos.coords.latitude, pos.coords.longitude);
-                        if (d > 2) { totalDistance += d; document.getElementById('distance').innerText = (totalDistance/1000).toFixed(2); }
+                        if (d > 2.5) { 
+                            totalDistance += d; 
+                            document.getElementById('distance').innerText = (totalDistance/1000).toFixed(2); 
+                        }
                     }
                     lastCoords = pos.coords;
                 }, null, { enableHighAccuracy: true });
